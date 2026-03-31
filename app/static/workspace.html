@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Mail Agent Workspace</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin:0; background:#0f172a; color:#e2e8f0; }
+    .container { max-width: 1040px; margin: 24px auto; padding: 0 16px 24px; }
+    .card { background:#111827; border:1px solid #334155; border-radius:12px; padding:16px; margin-bottom:14px; }
+    .title { font-size:20px; font-weight:700; margin:0 0 8px; }
+    .muted { color:#94a3b8; font-size:13px; margin:0; }
+    .row { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+    .row-3 { display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; margin-top:10px; }
+    textarea {
+      width: 100%;
+      min-height: 84px;
+      border: 1px solid #334155;
+      background: #0b1220;
+      color: #e2e8f0;
+      border-radius: 10px;
+      padding: 10px 12px;
+      box-sizing: border-box;
+      resize: vertical;
+      font-size: 14px;
+    }
+    button { width:100%; border:none; border-radius:10px; padding:10px 12px; font-weight:600; color:#fff; background:#2563eb; cursor:pointer; }
+    button.secondary { background:#475569; }
+    button:disabled { opacity:.6; cursor:not-allowed; }
+    .status { margin-top:8px; font-size:13px; color:#93c5fd; }
+    .group-title { font-size:14px; font-weight:700; margin:10px 0 8px; background:#1e3a8a; color:#dbeafe; padding:6px 10px; border-radius:8px; }
+    .pending-item { border:1px solid #334155; border-radius:10px; padding:10px; margin-bottom:8px; background:#0b1220; }
+    .pill { display:inline-block; font-size:12px; padding:2px 8px; border-radius:999px; background:#1e40af; margin-right:6px; }
+    .mini-btn { width:auto; display:inline-block; margin-top:8px; margin-right:8px; padding:6px 10px; font-size:12px; }
+    .mini-btn.secondary { background:#64748b; }
+    .cmd-chip {
+      width:auto;
+      display:inline-block;
+      margin: 8px 8px 0 0;
+      background:#1f2937;
+      border:1px solid #334155;
+      color:#cbd5e1;
+      font-size:12px;
+      padding:6px 10px;
+      border-radius:999px;
+    }
+    .cmd-chip:hover { background:#334155; }
+    pre { margin:0; white-space:pre-wrap; background:#020617; border-radius:8px; padding:12px; color:#d1fae5; font-size:12px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="card">
+      <div class="title">🤖 Mail Agent 命令工作台</div>
+      <p class="muted" id="loginInfo">正在校验登录状态...</p>
+      <div style="margin-top:10px;">
+        <textarea id="commandInput" placeholder="输入自然语句命令，例如：帮我分类最近10封未读邮件，并给我推荐处理策略。"></textarea>
+        <div class="row" style="margin-top:10px;">
+          <button id="sendCommandBtn">发送命令并自动执行</button>
+          <button id="clearCommandBtn" class="secondary">清空输入</button>
+        </div>
+      </div>
+      <div class="row-3">
+        <button class="cmd-chip" data-cmd="帮我分类最近10封未读邮件">分类最近10封</button>
+        <button class="cmd-chip" data-cmd="直接处理最近5封未读邮件">处理最近5封</button>
+        <button class="cmd-chip" data-cmd="读取最近8封未读邮件主题">读取最近8封</button>
+      </div>
+      <div class="row" style="margin-top:10px;">
+        <button id="logoutBtn" class="secondary">退出登录</button>
+        <button id="backBtn" class="secondary">返回登录页</button>
+      </div>
+      <div id="mailboxStatus" class="status">Ready</div>
+    </div>
+
+    <div class="card">
+      <div class="title" style="font-size:16px;">分类结果（同类聚合）</div>
+      <div id="pendingList"></div>
+    </div>
+
+    <div class="card">
+      <div class="title" style="font-size:16px;">处理结果</div>
+      <pre id="result">{
+  "tip": "点击上方按钮开始处理。"
+}</pre>
+    </div>
+  </div>
+
+  <script>
+    const commandInput = document.getElementById("commandInput");
+    const sendCommandBtn = document.getElementById("sendCommandBtn");
+    const clearCommandBtn = document.getElementById("clearCommandBtn");
+    const cmdChips = Array.from(document.querySelectorAll(".cmd-chip"));
+    const logoutBtn = document.getElementById("logoutBtn");
+    const backBtn = document.getElementById("backBtn");
+    const mailboxStatusEl = document.getElementById("mailboxStatus");
+    const pendingListEl = document.getElementById("pendingList");
+    const resultEl = document.getElementById("result");
+    const loginInfoEl = document.getElementById("loginInfo");
+
+    function tryParseJson(text) {
+      try { return JSON.parse(text); } catch (_) { return null; }
+    }
+
+    async function ensureLogin() {
+      const resp = await fetch("/mailbox-status");
+      const data = await resp.json();
+      if (!data.logged_in) {
+        window.location.href = "/";
+        return false;
+      }
+      loginInfoEl.textContent = `当前登录邮箱：${data.email_address}`;
+      return true;
+    }
+
+    function renderPendingItems(items) {
+      pendingListEl.innerHTML = "";
+      if (!items || items.length === 0) {
+        pendingListEl.innerHTML = "<div class='status'>暂无待处理邮件。</div>";
+        return;
+      }
+      const groups = {};
+      items.forEach(item => {
+        const key = item.classification || "other";
+        if (!groups[key]) groups[key] = [];
+        groups[key].push(item);
+      });
+      const ordered = Object.keys(groups).sort();
+      let idx = 0;
+      ordered.forEach(cat => {
+        const title = document.createElement("div");
+        title.className = "group-title";
+        title.textContent = `分类: ${cat}（${groups[cat].length}封）`;
+        pendingListEl.appendChild(title);
+
+        groups[cat].forEach(item => {
+          idx += 1;
+          const div = document.createElement("div");
+          div.className = "pending-item";
+          const intents = (item.intents || []).map(x => x.intent).join(", ") || "none";
+          const actions = (item.actions || []).map(x => x.tool).join(", ") || "none";
+          div.innerHTML = `
+            <div><strong>#${idx} ${item.subject}</strong></div>
+            <div class="status">发件人：${item.sender}</div>
+            <div style="margin:6px 0;">
+              <span class="pill">${item.classification}</span>
+              <span class="pill">意图: ${intents}</span>
+              <span class="pill">动作: ${actions}</span>
+            </div>
+            <div class="status">推荐处理：${item.recommended_action || "人工确认"}</div>
+            <button class="mini-btn" data-action="exec">确认执行</button>
+            <button class="mini-btn secondary" data-action="skip">跳过</button>
+          `;
+          const execBtn = div.querySelector('button[data-action="exec"]');
+          const skipBtn = div.querySelector('button[data-action="skip"]');
+          execBtn.addEventListener("click", async () => {
+            if (!confirm(`确认执行该邮件操作？\n主题: ${item.subject}`)) return;
+            execBtn.disabled = true;
+            skipBtn.disabled = true;
+            try {
+              const resp = await fetch("/execute-email-action", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ email: { subject: item.subject, sender: item.sender, body: item.body }, send_reply: true })
+              });
+              const raw = await resp.text();
+              const data = tryParseJson(raw);
+              if (!resp.ok) throw new Error(data ? JSON.stringify(data) : raw);
+              resultEl.textContent = JSON.stringify(data, null, 2);
+              mailboxStatusEl.textContent = `执行完成: ${item.subject}`;
+              div.remove();
+            } catch (err) {
+              mailboxStatusEl.textContent = `执行失败: ${String(err)}`;
+              execBtn.disabled = false;
+              skipBtn.disabled = false;
+            }
+          });
+          skipBtn.addEventListener("click", () => div.remove());
+          pendingListEl.appendChild(div);
+        });
+      });
+    }
+
+    async function sendCommand(rawCommand) {
+      const command = (rawCommand ?? commandInput.value).trim();
+      if (!command) {
+        mailboxStatusEl.textContent = "请输入命令后再执行。";
+        return;
+      }
+      mailboxStatusEl.textContent = "Agent 正在识别意图并执行...";
+      sendCommandBtn.disabled = true;
+      try {
+        const resp = await fetch("/command", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ command })
+        });
+        const raw = await resp.text();
+        const data = tryParseJson(raw);
+        if (!resp.ok) throw new Error(data ? JSON.stringify(data) : raw);
+        resultEl.textContent = JSON.stringify(data ?? { raw }, null, 2);
+        if (data?.intent === "classify_inbox") {
+          renderPendingItems(data.execution_result?.items || []);
+        } else if (data?.intent === "process_inbox") {
+          renderPendingItems([]);
+        }
+        mailboxStatusEl.textContent = `执行完成 | 意图: ${data.intent} | 置信度: ${Number(data.confidence || 0).toFixed(2)}`;
+      } catch (err) {
+        mailboxStatusEl.textContent = `命令执行失败: ${String(err)}`;
+      } finally {
+        sendCommandBtn.disabled = false;
+      }
+    }
+
+    async function logout() {
+      await fetch("/logout-mailbox", { method: "POST" });
+      window.location.href = "/";
+    }
+
+    sendCommandBtn.addEventListener("click", () => sendCommand());
+    clearCommandBtn.addEventListener("click", () => { commandInput.value = ""; });
+    commandInput.addEventListener("keydown", (event) => {
+      if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+        event.preventDefault();
+        sendCommand();
+      }
+    });
+    cmdChips.forEach(btn => {
+      btn.addEventListener("click", () => {
+        commandInput.value = btn.dataset.cmd || "";
+        sendCommand(commandInput.value);
+      });
+    });
+    logoutBtn.addEventListener("click", logout);
+    backBtn.addEventListener("click", () => { window.location.href = "/"; });
+
+    ensureLogin();
+  </script>
+</body>
+</html>
