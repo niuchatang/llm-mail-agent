@@ -88,3 +88,7 @@ curl -X POST "http://127.0.0.1:8001/process-email" \
 - `OPENAI_MODEL`（默认 `gpt-4o-mini`）
 
 未配置时，系统会自动使用规则引擎完成演示。
+
+## 前端界面
+<img width="1511" height="805" alt="截屏2026-03-31 17 44 33_副本" src="https://github.com/user-attachments/assets/ee1052c0-a45c-4863-8cb6-6ace595cfa21" />
+
